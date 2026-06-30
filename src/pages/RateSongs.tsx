@@ -18,7 +18,7 @@ function slugify(text: string): string {
 }
 
 // Si el song trae coverUrl explícito lo respeta; si no, lo deriva del título
-function resolveImagePath(song: { title: string; coverUrl?: string }) {
+function resolveImagePath(song: { title: string; coverUrl?: string | null }) {
   if (song.coverUrl) {
     if (song.coverUrl.startsWith('http') || song.coverUrl.startsWith('/images/')) return song.coverUrl;
     return `/images/${song.coverUrl}`;

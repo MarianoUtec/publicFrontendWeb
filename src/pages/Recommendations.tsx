@@ -2,6 +2,28 @@ import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMusicMatch } from '../context/MusicMatchContext';
 
+// Convierte el título de la canción en el mismo slug usado para los .mp3 / .png
+// Ej: "Freak'N You" -> "freak-n-you" | "Te Encontré" -> "te-encontre"
+function slugify(text: string): string {
+  return text
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes/acentos
+    .replace(/'/g, '-')                                 // apóstrofes -> guion
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')                        // quita signos raros
+    .trim()
+    .replace(/\s+/g, '-')                                // espacios -> guion
+    .replace(/-+/g, '-');                                // colapsa guiones repetidos
+}
+
+// Si el song trae coverUrl explícito lo respeta; si no, lo deriva del título
+function resolveImagePath(song: { title: string; coverUrl?: string | null }) {
+  if (song.coverUrl) {
+    if (song.coverUrl.startsWith('http') || song.coverUrl.startsWith('/images/')) return song.coverUrl;
+    return `/images/${song.coverUrl}`;
+  }
+  return `/images/${slugify(song.title)}.png`;
+}
+
 export function Recommendations() {
   const { 
     recommendation, 
@@ -87,49 +109,63 @@ export function Recommendations() {
                 </p>
               )}
               <div className="songs-grid">
-                {songs.map(song => (
-                  <div key={song.id} className="song-card">
-                    {song.coverUrl
-                      ? <img className="song-cover" src={song.coverUrl} alt={song.title} />
-                      : <div className="song-cover-placeholder">🎵</div>
-                    }
-                    <div className="song-info">
-                      <h4 title={song.title}>{song.title}</h4>
-                      <p className="artist">{song.artist}</p>
-                      {song.albumName && <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '8px' }}>💿 {song.albumName}</p>}
-                      {song.previewUrl && (
-                        <audio controls style={{ width: '100%', height: '28px', marginTop: '8px' }}>
-                          <source src={song.previewUrl} />
-                        </audio>
-                      )}
-                      {/* Audio features */}
-                      {(song.danceability != null || song.energy != null || song.valence != null) && (
-                        <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                          {song.danceability != null && (
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '2px' }}>
-                                <span>Danceability</span><span>{Math.round(song.danceability * 100)}%</span>
+                {songs.map(song => {
+                  const imgSrc = resolveImagePath(song);
+                  return (
+                    <div key={song.id} className="song-card">
+                      {imgSrc
+                        ? <img
+                            className="song-cover"
+                            src={imgSrc}
+                            alt={song.title}
+                            onError={e => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.style.display = 'none';
+                              const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                              if (fallback) fallback.style.display = 'flex';
+                            }}
+                          />
+                        : null
+                      }
+                      <div className="song-cover-placeholder" style={{ display: imgSrc ? 'none' : 'flex' }}>🎵</div>
+                      <div className="song-info">
+                        <h4 title={song.title}>{song.title}</h4>
+                        <p className="artist">{song.artist}</p>
+                        {song.albumName && <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '8px' }}>💿 {song.albumName}</p>}
+                        {song.previewUrl && (
+                          <audio controls style={{ width: '100%', height: '28px', marginTop: '8px' }}>
+                            <source src={song.previewUrl} />
+                          </audio>
+                        )}
+                        {/* Audio features */}
+                        {(song.danceability != null || song.energy != null || song.valence != null) && (
+                          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            {song.danceability != null && (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '2px' }}>
+                                  <span>Danceability</span><span>{Math.round(song.danceability * 100)}%</span>
+                                </div>
+                                <div className="progress-bar" style={{ height: '4px' }}>
+                                  <div className="progress-fill" style={{ width: `${song.danceability * 100}%` }} />
+                                </div>
                               </div>
-                              <div className="progress-bar" style={{ height: '4px' }}>
-                                <div className="progress-fill" style={{ width: `${song.danceability * 100}%` }} />
+                            )}
+                            {song.energy != null && (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '2px' }}>
+                                  <span>Energy</span><span>{Math.round(song.energy * 100)}%</span>
+                                </div>
+                                <div className="progress-bar" style={{ height: '4px' }}>
+                                  <div className="progress-fill" style={{ width: `${song.energy * 100}%`, background: 'linear-gradient(90deg, var(--secondary) 0%, var(--accent) 100%)' }} />
+                                </div>
                               </div>
-                            </div>
-                          )}
-                          {song.energy != null && (
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '2px' }}>
-                                <span>Energy</span><span>{Math.round(song.energy * 100)}%</span>
-                              </div>
-                              <div className="progress-bar" style={{ height: '4px' }}>
-                                <div className="progress-fill" style={{ width: `${song.energy * 100}%`, background: 'linear-gradient(90deg, var(--secondary) 0%, var(--accent) 100%)' }} />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
