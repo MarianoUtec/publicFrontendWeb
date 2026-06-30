@@ -1,10 +1,19 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMusicMatch } from '../context/MusicMatchContext';
 import * as api from '../lib/api';
 
 export function Chat() {
-  const { conversations, fetchConversations, loadingConversations, user, latentProfile, latentUsers, addToast } = useMusicMatch();
+  const { 
+    conversations, 
+    fetchConversations, 
+    loadingConversations, 
+    user, 
+    latentProfile, 
+    latentUsers,
+    compatibilities,
+    addToast 
+  } = useMusicMatch();
   const [searchParams] = useSearchParams();
   const targetUserId = searchParams.get('user') ? Number(searchParams.get('user')) : null;
 
@@ -16,7 +25,36 @@ export function Chat() {
   const [activeConv, setActiveConv] = useState<api.Conversation | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { fetchConversations(); }, []);
+  // Crear mapa de compatibilidades
+  const compatibilityMap = useMemo(() => {
+    const map = new Map<number, number>();
+    compatibilities.forEach(item => {
+      map.set(item.userId, item.compatibilityScore);
+    });
+    return map;
+  }, [compatibilities]);
+
+  // Obtener top 5 usuarios más compatibles (excluyendo al usuario actual)
+  const topCompatibleUsers = useMemo(() => {
+    if (!latentProfile || latentUsers.length === 0) return [];
+    
+    return latentUsers
+      .filter(u => u.userId !== latentProfile.userId && u.userId !== user?.id)
+      .sort((a, b) => {
+        const scoreA = compatibilityMap.get(a.userId) || 0;
+        const scoreB = compatibilityMap.get(b.userId) || 0;
+        return scoreB - scoreA;
+      })
+      .slice(0, 5)
+      .map(u => ({
+        ...u,
+        compatibilityScore: compatibilityMap.get(u.userId) || 0
+      }));
+  }, [latentUsers, latentProfile, user, compatibilityMap]);
+
+  useEffect(() => { 
+    fetchConversations(); 
+  }, []);
 
   // Auto-open conversation with targetUserId from query param
   useEffect(() => {
@@ -79,12 +117,7 @@ export function Chat() {
     }
   };
 
-  const suggestedUsers = latentProfile
-    ? latentUsers.filter(u => u.userId !== latentProfile.userId && u.userId !== user?.id).slice(0, 5)
-    : [];
-
   const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const formatDate = (iso: string) => new Date(iso).toLocaleDateString();
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -99,10 +132,10 @@ export function Chat() {
           ) : conversations.length === 0 ? (
             <div style={{ padding: '20px', color: 'var(--muted-foreground)', fontSize: '13px', textAlign: 'center' }}>
               <p style={{ marginBottom: '12px' }}>No conversations yet</p>
-              {suggestedUsers.length > 0 && (
+              {topCompatibleUsers.length > 0 && (
                 <>
-                  <p style={{ fontSize: '12px', marginBottom: '8px' }}>Start a chat with a compatible user:</p>
-                  {suggestedUsers.map(u => (
+                  <p style={{ fontSize: '12px', marginBottom: '8px' }}>Start a chat with your top compatible users:</p>
+                  {topCompatibleUsers.map(u => (
                     <button key={u.userId} onClick={() => startChatWithUser(u.userId)}
                       style={{ display: 'block', width: '100%', marginBottom: '6px', padding: '8px', borderRadius: '6px', background: 'var(--muted)', border: '1px solid var(--border)', color: 'var(--foreground)', cursor: 'pointer', fontSize: '13px' }}>
                       {u.userName} ({Math.round(u.compatibilityScore)}%)
@@ -132,26 +165,64 @@ export function Chat() {
                     <span style={{ fontSize: '11px', background: 'var(--primary)', color: 'white', borderRadius: '10px', padding: '1px 6px' }}>{conv.unreadCount} new</span>
                   )}
                 </div>
+                {/* Mostrar compatibilidad si existe */}
+                {compatibilityMap.has(conv.otherUserId) && (
+                  <span style={{ fontSize: '11px', color: 'var(--muted-foreground)' }}>
+                    {Math.round(compatibilityMap.get(conv.otherUserId) || 0)}%
+                  </span>
+                )}
               </div>
             ))
           )}
         </div>
 
-        {/* Suggested */}
-        {conversations.length > 0 && suggestedUsers.length > 0 && (
+        {/* Top 5 Compatible Users - siempre visible */}
+        {topCompatibleUsers.length > 0 && (
           <div style={{ borderTop: '1px solid var(--border)', padding: '12px 16px' }}>
-            <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Suggested</p>
-            {suggestedUsers.slice(0, 3).map(u => (
-              <button key={u.userId} onClick={() => startChatWithUser(u.userId)}
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', marginBottom: '4px', padding: '6px 8px', borderRadius: '6px', background: 'transparent', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', fontSize: '13px', transition: 'background 0.1s' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--muted)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <div className="avatar avatar-sm">{u.userName[0].toUpperCase()}</div>
-                <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.userName}</span>
-                <span style={{ fontSize: '11px' }}>{Math.round(u.compatibilityScore)}%</span>
-              </button>
-            ))}
+            <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+              🏆 Top {topCompatibleUsers.length} Compatible
+            </p>
+            {topCompatibleUsers.map(u => {
+              const existingConv = conversations.find(c => c.otherUserId === u.userId);
+              return (
+                <button 
+                  key={u.userId} 
+                  onClick={() => existingConv ? openConversation(existingConv) : startChatWithUser(u.userId)}
+                  style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '8px', 
+                    width: '100%', 
+                    marginBottom: '4px', 
+                    padding: '6px 8px', 
+                    borderRadius: '6px', 
+                    background: 'transparent', 
+                    border: 'none', 
+                    color: 'var(--muted-foreground)', 
+                    cursor: 'pointer', 
+                    fontSize: '13px', 
+                    transition: 'background 0.1s' 
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--muted)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <div className="avatar avatar-sm">{u.userName[0].toUpperCase()}</div>
+                  <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.userName}
+                  </span>
+                  <span style={{ 
+                    fontSize: '11px', 
+                    fontWeight: '600',
+                    color: u.compatibilityScore > 70 ? '#fbbf24' : 'var(--muted-foreground)'
+                  }}>
+                    {Math.round(u.compatibilityScore)}%
+                  </span>
+                  {existingConv && (
+                    <span style={{ fontSize: '10px', color: 'var(--muted-foreground)' }}>💬</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -164,9 +235,9 @@ export function Chat() {
             <div className="avatar avatar-md">{activeConv.otherUserName?.[0]?.toUpperCase() || '?'}</div>
             <div>
               <p style={{ fontWeight: '700', fontSize: '16px' }}>{activeConv.otherUserName}</p>
-              {latentUsers.find(u => u.userId === activeConv.otherUserId) && (
-                <p style={{ fontSize: '12px', color: 'var(--muted-foreground)' }}>
-                  {Math.round(latentUsers.find(u => u.userId === activeConv.otherUserId)!.compatibilityScore)}% compatible
+              {compatibilityMap.has(activeConv.otherUserId) && (
+                <p style={{ fontSize: '12px', color: '#fbbf24' }}>
+                  {Math.round(compatibilityMap.get(activeConv.otherUserId) || 0)}% compatible
                 </p>
               )}
             </div>

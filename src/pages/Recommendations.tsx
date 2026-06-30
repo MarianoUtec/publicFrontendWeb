@@ -1,16 +1,55 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMusicMatch } from '../context/MusicMatchContext';
 
 export function Recommendations() {
-  const { recommendation, loadingRecs, fetchRecommendations, latentProfile, latentUsers } = useMusicMatch();
+  const { 
+    recommendation, 
+    loadingRecs, 
+    fetchRecommendations, 
+    latentProfile, 
+    latentUsers,
+    compatibilities,
+    loadingCompatibilities,
+    fetchCompatibilities
+  } = useMusicMatch();
   const navigate = useNavigate();
 
-  useEffect(() => { fetchRecommendations(); }, []);
+  useEffect(() => { 
+    fetchRecommendations();
+    fetchCompatibilities();
+  }, []);
 
-  const closestUser = latentProfile ? latentUsers.find(u => u.userId === latentProfile.closestUserId) : null;
+  // Crear mapa de compatibilidades para acceso rápido
+  const compatibilityMap = useMemo(() => {
+    const map = new Map<number, number>();
+    compatibilities.forEach(item => {
+      map.set(item.userId, item.compatibilityScore);
+    });
+    return map;
+  }, [compatibilities]);
 
-  if (loadingRecs) {
+  // Encontrar el usuario con mejor compatibilidad (excluyendo al usuario actual)
+  const bestMatch = useMemo(() => {
+    if (!latentProfile || latentUsers.length === 0) return null;
+    return latentUsers
+      .filter(u => u.userId !== latentProfile.userId)
+      .sort((a, b) => {
+        const scoreA = compatibilityMap.get(a.userId) || 0;
+        const scoreB = compatibilityMap.get(b.userId) || 0;
+        return scoreB - scoreA;
+      })[0] || null;
+  }, [latentUsers, latentProfile, compatibilityMap]);
+
+  // Usar el recommendation.basedOnUserName si existe, sino usar el bestMatch
+  const closestUserName = recommendation?.basedOnUserName || bestMatch?.userName || '';
+  
+  // Calcular compatibilidad del mejor match
+  const bestCompatibilityScore = bestMatch 
+    ? (compatibilityMap.get(bestMatch.userId) || 0)
+    : (latentProfile?.compatibilityScore || 0);
+
+  if (loadingRecs || loadingCompatibilities) {
     return (
       <div className="page-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="spinner" />
@@ -42,7 +81,9 @@ export function Recommendations() {
               {recommendation && (
                 <p style={{ fontSize: '14px', color: 'var(--muted-foreground)', marginBottom: '20px' }}>
                   Based on <strong style={{ color: '#9f5ef8' }}>{recommendation.basedOnUserName}</strong>'s taste —{' '}
-                  <span className="badge badge-info">{Math.round(latentProfile?.compatibilityScore || 0)}% compatible</span>
+                  <span className="badge badge-info">
+                    {Math.round(bestCompatibilityScore)}% compatible
+                  </span>
                 </p>
               )}
               <div className="songs-grid">
@@ -94,28 +135,32 @@ export function Recommendations() {
 
             {/* Sidebar: compatible user */}
             <div>
-              {(closestUser || latentProfile) && (
+              {(bestMatch || latentProfile) && (
                 <div className="card" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.1) 0%, rgba(8,145,178,0.1) 100%)', border: '1px solid rgba(124,58,237,0.3)' }}>
                   <h3 style={{ marginBottom: '20px' }}>🧬 Your Music Twin</h3>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
-                    <div className="avatar avatar-lg">{(recommendation?.basedOnUserName || 'U')[0].toUpperCase()}</div>
-                    <p style={{ fontWeight: '700', fontSize: '18px' }}>{recommendation?.basedOnUserName}</p>
+                    <div className="avatar avatar-lg">
+                      {(closestUserName || 'U')[0].toUpperCase()}
+                    </div>
+                    <p style={{ fontWeight: '700', fontSize: '18px' }}>{closestUserName || 'No match yet'}</p>
                     <p className="gradient-text" style={{ fontSize: '40px', fontWeight: '800' }}>
-                      {Math.round(latentProfile?.compatibilityScore || 0)}%
+                      {Math.round(bestCompatibilityScore)}%
                     </p>
                     <p style={{ fontSize: '12px', color: 'var(--muted-foreground)' }}>compatibility score</p>
-                    {closestUser && (
+                    {bestMatch && (
                       <div style={{ width: '100%', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '12px' }}>
                         <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Latent Coordinates</p>
                         <code style={{ fontSize: '12px', color: 'var(--accent)' }}>
-                          [{closestUser.x.toFixed(3)}, {closestUser.y.toFixed(3)}]
+                          [{bestMatch.x.toFixed(3)}, {bestMatch.y.toFixed(3)}]
                         </code>
                       </div>
                     )}
-                    <button className="btn btn-outline btn-sm" style={{ width: '100%', justifyContent: 'center' }}
-                      onClick={() => navigate(`/chat`)}>
-                      💬 Start Chat
-                    </button>
+                    {bestMatch && (
+                      <button className="btn btn-outline btn-sm" style={{ width: '100%', justifyContent: 'center' }}
+                        onClick={() => navigate(`/chat`)}>
+                        💬 Start Chat
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -127,20 +172,27 @@ export function Recommendations() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {latentUsers
                       .filter(u => u.userId !== latentProfile.userId)
-                      .sort((a, b) => b.compatibilityScore - a.compatibilityScore)
+                      .sort((a, b) => {
+                        const scoreA = compatibilityMap.get(a.userId) || 0;
+                        const scoreB = compatibilityMap.get(b.userId) || 0;
+                        return scoreB - scoreA;
+                      })
                       .slice(0, 5)
-                      .map(u => (
-                        <div key={u.userId} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px' }}>
-                          <div className="avatar avatar-sm">{u.userName[0].toUpperCase()}</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{ fontWeight: '600', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.userName}</p>
-                            <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', fontFamily: 'monospace' }}>
-                              [{u.x.toFixed(2)}, {u.y.toFixed(2)}]
-                            </p>
+                      .map(u => {
+                        const score = compatibilityMap.get(u.userId) || 0;
+                        return (
+                          <div key={u.userId} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                            <div className="avatar avatar-sm">{u.userName[0].toUpperCase()}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ fontWeight: '600', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.userName}</p>
+                              <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', fontFamily: 'monospace' }}>
+                                [{u.x.toFixed(2)}, {u.y.toFixed(2)}]
+                              </p>
+                            </div>
+                            <span className="badge badge-primary">{Math.round(score)}%</span>
                           </div>
-                          <span className="badge badge-primary">{Math.round(u.compatibilityScore)}%</span>
-                        </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 </div>
               )}
