@@ -1,8 +1,91 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useMusicMatch } from '../context/MusicMatchContext';
 import { Pagination } from '../components/Pagination';
 
 const PAGE_SIZES = [10, 25, 50];
+
+// Convierte el título de la canción en el mismo slug usado para los .mp3
+// Ej: "Freak'N You" -> "freak-n-you" | "Te Encontré" -> "te-encontre"
+function slugify(text: string): string {
+  return text
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita tildes/acentos
+    .replace(/'/g, '-')                                 // apóstrofes -> guion
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')                        // quita signos raros
+    .trim()
+    .replace(/\s+/g, '-')                                // espacios -> guion
+    .replace(/-+/g, '-');                                // colapsa guiones repetidos
+}
+
+// Si el song trae coverUrl explícito lo respeta; si no, lo deriva del título
+function resolveImagePath(song: { title: string; coverUrl?: string }) {
+  if (song.coverUrl) {
+    if (song.coverUrl.startsWith('http') || song.coverUrl.startsWith('/images/')) return song.coverUrl;
+    return `/images/${song.coverUrl}`;
+  }
+  return `/images/${slugify(song.title)}.png`;
+}
+
+function AudioPlayer({ src, songId, playingId, onPlay }: {
+  src: string;
+  songId: number;
+  playingId: number | null;
+  onPlay: (id: number | null) => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const isPlaying = playingId === songId;
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying]);
+
+  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+      <audio
+        ref={audioRef}
+        src={src}
+        onTimeUpdate={e => setProgress((e.currentTarget.currentTime / (e.currentTarget.duration || 1)) * 100)}
+        onLoadedMetadata={e => setDuration(e.currentTarget.duration)}
+        onEnded={() => onPlay(null)}
+      />
+      <button
+        onClick={() => onPlay(isPlaying ? null : songId)}
+        style={{
+          width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0,
+          background: 'var(--primary)', color: '#fff', fontSize: '10px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: 'none', cursor: 'pointer',
+        }}
+        title={isPlaying ? 'Pause' : 'Play preview'}
+      >
+        {isPlaying ? '⏸' : '▶'}
+      </button>
+      <div
+        style={{ flex: 1, height: '4px', background: 'var(--border)', borderRadius: '2px', cursor: 'pointer', position: 'relative' }}
+        onClick={e => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const pct = (e.clientX - rect.left) / rect.width;
+          if (audioRef.current) audioRef.current.currentTime = pct * audioRef.current.duration;
+        }}
+      >
+        <div style={{ width: `${progress}%`, height: '100%', background: 'var(--primary)', borderRadius: '2px', transition: 'width 0.1s' }} />
+      </div>
+      <span style={{ fontSize: '10px', color: 'var(--muted-foreground)', flexShrink: 0, fontFamily: 'monospace' }}>
+        {duration ? fmt((progress / 100) * duration) : '0:00'}
+      </span>
+    </div>
+  );
+}
 
 export function RateSongs() {
   const { songsList, ratedMap, submitRating, loadingSongs, addToast, searchSongs, searchResults, searchQuery, setSearchQuery } = useMusicMatch();
@@ -12,6 +95,8 @@ export function RateSongs() {
   const [pageSize, setPageSize] = useState(10);
   const [showUnratedOnly, setShowUnratedOnly] = useState(false);
   const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [playingId, setPlayingId] = useState<number | null>(null);
+  const [hoveredStar, setHoveredStar] = useState<{ id: number; star: number } | null>(null);
 
   // Debounced search
   useEffect(() => {
@@ -35,6 +120,11 @@ export function RateSongs() {
   const effectiveRating = (id: number) => pending[id] ?? ratedMap[id] ?? 0;
   const ratedCount = songsList.filter(s => effectiveRating(s.id) > 0).length;
   const progress = songsList.length > 0 ? (ratedCount / songsList.length) * 100 : 0;
+
+  // Guardado MANUAL: solo se asigna el rating al estado "pending", no se envía hasta presionar "Save"
+  const setStarRating = (songId: number, score: number) => {
+    setPending(p => ({ ...p, [songId]: score }));
+  };
 
   const handleSave = async () => {
     if (Object.keys(pending).length === 0) return;
@@ -68,7 +158,7 @@ export function RateSongs() {
       <div className="page-content">
         <div className="page-header">
           <h1>⭐ Rate Songs</h1>
-          <p>Rate songs to get personalized recommendations</p>
+          <p>Rate songs to get personalized recommendations · Click ▶ to preview</p>
         </div>
 
         {/* Progress */}
@@ -117,26 +207,90 @@ export function RateSongs() {
             {paged.map(song => {
               const current = effectiveRating(song.id);
               const isPending = pending[song.id] !== undefined;
+              const hovered = hoveredStar?.id === song.id ? hoveredStar.star : null;
+              const displayStars = hovered ?? current;
+              const imgSrc = resolveImagePath(song);
+
               return (
                 <div key={song.id} className="song-card" style={{ border: isPending ? '1px solid var(--primary)' : undefined }}>
-                  {song.coverUrl
-                    ? <img className="song-cover" src={song.coverUrl} alt={song.title} />
-                    : <div className="song-cover-placeholder">🎵</div>
+                  {imgSrc
+                    ? <img
+                        className="song-cover"
+                        src={imgSrc}
+                        alt={song.title}
+                        onError={e => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.style.display = 'none';
+                          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                          if (fallback) fallback.style.display = 'flex';
+                        }}
+                      />
+                    : null
                   }
+                  <div className="song-cover-placeholder" style={{ display: imgSrc ? 'none' : 'flex' }}>🎵</div>
                   <div className="song-info">
                     <h4 title={song.title}>{song.title}</h4>
                     <p className="artist" title={song.artist}>{song.artist}</p>
-                    {song.albumName && <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '8px' }}>💿 {song.albumName}</p>}
-                    <div className="stars">
+                    {song.albumName && <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginBottom: '4px' }}>💿 {song.albumName}</p>}
+
+                    {/* Reproductor de audio */}
+                    {song.previewUrl ? (
+                      <AudioPlayer
+                        src={song.previewUrl}
+                        songId={song.id}
+                        playingId={playingId}
+                        onPlay={setPlayingId}
+                      />
+                    ) : (
+                      <p style={{ fontSize: '10px', color: 'var(--muted-foreground)', marginTop: '6px', fontStyle: 'italic' }}>No preview available</p>
+                    )}
+
+                    {/* Estrellas (guardado manual: solo marca "pending") */}
+                    <div className="stars" style={{ marginTop: '10px' }}>
                       {[1, 2, 3, 4, 5].map(star => (
                         <button
                           key={star}
-                          className={`star ${current >= star ? 'active' : ''}`}
-                          onClick={() => setPending(p => ({ ...p, [song.id]: star }))}
+                          className={`star ${displayStars >= star ? 'active' : ''}`}
+                          style={{
+                            color: displayStars >= star ? '#fbbf24' : 'var(--border)',
+                            fontSize: '20px',
+                            transition: 'color 0.1s, transform 0.1s',
+                            transform: hoveredStar?.id === song.id && hoveredStar.star >= star ? 'scale(1.2)' : 'scale(1)',
+                          }}
+                          onMouseEnter={() => setHoveredStar({ id: song.id, star })}
+                          onMouseLeave={() => setHoveredStar(null)}
+                          onClick={() => setStarRating(song.id, star)}
                           title={`${star} star${star !== 1 ? 's' : ''}`}
                         >★</button>
                       ))}
+                      {current > 0 && (
+                        <span style={{ fontSize: '11px', color: 'var(--muted-foreground)', marginLeft: '6px', alignSelf: 'center' }}>
+                          {current}/5
+                        </span>
+                      )}
                     </div>
+
+                    {/* Audio features */}
+                    {(song.energy != null || song.danceability != null || song.valence != null) && (
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                        {song.energy != null && (
+                          <span style={{ fontSize: '10px', padding: '2px 6px', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', borderRadius: '4px', color: 'var(--primary-light)' }}>
+                            ⚡ {Math.round(song.energy * 100)}%
+                          </span>
+                        )}
+                        {song.danceability != null && (
+                          <span style={{ fontSize: '10px', padding: '2px 6px', background: 'rgba(6,182,212,0.1)', border: '1px solid rgba(6,182,212,0.3)', borderRadius: '4px', color: 'var(--accent)' }}>
+                            💃 {Math.round(song.danceability * 100)}%
+                          </span>
+                        )}
+                        {song.valence != null && (
+                          <span style={{ fontSize: '10px', padding: '2px 6px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '4px', color: '#fbbf24' }}>
+                            😊 {Math.round(song.valence * 100)}%
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {isPending && (
                       <span style={{ fontSize: '11px', color: 'var(--primary)', marginTop: '4px', display: 'block' }}>● Unsaved</span>
                     )}
@@ -156,7 +310,7 @@ export function RateSongs() {
           />
         )}
 
-        {/* Save button */}
+        {/* Botón de guardado manual (fijo abajo) */}
         {Object.keys(pending).length > 0 && (
           <button
             className="btn btn-primary"
